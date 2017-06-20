@@ -1,9 +1,11 @@
 import java.io.*;
 import java.util.*;
 
-/* Find dependencies between the Java classes in a directory. Present the
+/* By Ian Holyer, 2017. Open source: see licence.txt.
+
+Find dependencies between the Java classes in a directory. Present the
 results in reverse dependency order, emphasizing cyclic groups. Assumes the
-Java 8 class file format. Type java Depend [directory]. */
+Java 8 class file format.  */
 
 class Depend {
     private File folder;
@@ -53,6 +55,27 @@ class Depend {
         }
     }
 
+    // Read a class file, finding the class path, and extracting the references
+    // to other classes from the constant pool.
+    void readClass(Node node) throws Exception {
+        InputStream is = new FileInputStream(new File(folder, node.fileName));
+        DataInputStream in = new DataInputStream(is);
+        skipHeader(in);
+        String[] strings = readConstantPool(node, in);
+        skipSuperClasses(in);
+        readFields(node, in, strings);
+        readMethods(node, in, strings);
+        skipAttributes(in);
+        in.close();
+    }
+
+    // Skip the magic number, and minor/major version numbers.
+    void skipHeader(DataInputStream in) throws Exception {
+        in.readInt();
+        in.readUnsignedShort();
+        in.readUnsignedShort();
+    }
+
     // Define the codes used in class files for types of constant pool entry.
     private static final int
 	    UTF8 = 1, INTEGER = 3, FLOAT = 4, LONG = 5, DOUBLE = 6, CLASS = 7,
@@ -60,21 +83,16 @@ class Depend {
 	    NAME_AND_TYPE = 12, METHOD_HANDLE = 15, METHOD_TYPE = 16,
         INVOKE_DYNAMIC = 18;
 
-    // Read a class file, finding the class path, and extracting the references
-    // to other classes from the constant pool.
-    void readClass(Node node) throws Exception {
-        InputStream is = new FileInputStream(new File(folder, node.fileName));
-        DataInputStream in = new DataInputStream(is);
-        in.readInt();
-        in.readUnsignedShort();
-        in.readUnsignedShort();
+    // Read the constant pool, skip access flags, read class name.
+    // Extract the unique class references, return the strings.
+    String[] readConstantPool(Node node, DataInputStream in) throws Exception {
         int nConstants = in.readUnsignedShort();
-        String[] names = new String[nConstants];
+        String[] strings = new String[nConstants];
         int[] classes = new int[nConstants];
         for (int i = 1; i < nConstants; i++) {
             int type = in.readUnsignedByte();
             switch (type) {
-            case UTF8: names[i] = in.readUTF(); break;
+            case UTF8: strings[i] = in.readUTF(); break;
             case CLASS: classes[i] = in.readUnsignedShort(); break;
             case FIELDREF: case METHODREF: case INTERFACE_METHODREF:
             case NAME_AND_TYPE: case INVOKE_DYNAMIC:
@@ -92,18 +110,70 @@ class Depend {
                 break;
             }
         }
-        in.readUnsignedShort();
-        int thisClass = classes[in.readUnsignedShort()];
-        node.classPath = names[thisClass];
-        in.close();
+        int access = in.readUnsignedShort();
+        int thisClass = in.readUnsignedShort();
+        node.classPath = strings[classes[thisClass]];
         node.refs = new ArrayList<String>();
         for (int i=0; i<classes.length; i++) {
             if (classes[i] == 0) continue;
-            String name = names[classes[i]];
+            String name = strings[classes[i]];
             if (name.contains("$")) continue;
             if (name.equals(node.classPath)) continue;
             if (node.refs.contains(name)) continue;
             node.refs.add(name);
+        }
+        return strings;
+    }
+
+    // Skip the superclass and super interfaces.  They have already been picked
+    // up as class entries in the constant pool.
+    void skipSuperClasses(DataInputStream in) throws Exception {
+        in.readUnsignedShort();
+        int n = in.readUnsignedShort();
+        for (int i = 0; i < n; i++) in.readUnsignedShort();
+    }
+
+    // Read the fields.  Extract class references from descriptors.
+    void readFields(Node node, DataInputStream in, String[] strings)
+    throws Exception {
+        int n = in.readUnsignedShort();
+        for (int i = 0; i < n; i++) {
+            int access = in.readUnsignedShort();
+            int name = in.readUnsignedShort();
+            int descriptorId = in.readUnsignedShort();
+            readDescriptor(node, strings[descriptorId]);
+            skipAttributes(in);
+        }
+    }
+
+    // Read the methods in the same way as the fields.
+    void readMethods(Node node, DataInputStream in, String[] strings)
+    throws Exception {
+        readFields(node, in, strings);
+    }
+
+    // Find class references of the form L...; in the descriptor.
+    void readDescriptor(Node node, String descriptor) {
+        while (true) {
+            int L = descriptor.indexOf('L');
+            if (L < 0) break;
+            int S = descriptor.indexOf(';', L);
+            String name = descriptor.substring(L+1, S);
+            descriptor = descriptor.substring(S+1);
+            if (name.contains("$")) continue;
+            if (name.equals(node.classPath)) continue;
+            if (node.refs.contains(name)) continue;
+            node.refs.add(name);
+        }
+    }
+
+    // Skip field, method or class attributes.
+    void skipAttributes(DataInputStream in) throws Exception {
+        int n = in.readUnsignedShort();
+        for (int i = 0; i < n; i++) {
+            in.readUnsignedShort();
+            int n2 = in.readInt();
+            for (int j = 0; j < n2; j++) in.readUnsignedByte();
         }
     }
 
