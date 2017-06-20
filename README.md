@@ -1,5 +1,5 @@
 # java-depend
-Find dependencies between Java classes.
+Find dependencies between Java classes in a package.
 
 This is a small one-piece program for Java developers to find dependencies and
 dependency cycles between their own classes.
