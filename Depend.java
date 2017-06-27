@@ -65,7 +65,7 @@ class Depend {
         skipSuperClasses(in);
         readFields(node, in, strings);
         readMethods(node, in, strings);
-        skipAttributes(in);
+        readAttributes(node, in, strings);
         in.close();
     }
 
@@ -142,7 +142,7 @@ class Depend {
             int name = in.readUnsignedShort();
             int descriptorId = in.readUnsignedShort();
             readDescriptor(node, strings[descriptorId]);
-            skipAttributes(in);
+            readAttributes(node, in, strings);
         }
     }
 
@@ -152,28 +152,37 @@ class Depend {
         readFields(node, in, strings);
     }
 
-    // Find class references of the form L...; in the descriptor.
+    // Read field, method or class attributes, extract signatures.
+    void readAttributes(Node node, DataInputStream in, String[] strings)
+    throws Exception {
+        int n = in.readUnsignedShort();
+        for (int i = 0; i < n; i++) {
+            int t = in.readUnsignedShort();
+            int len = in.readInt();
+            if (strings[t].equals("Signature") && len == 2) {
+                int si = in.readUnsignedShort();
+                String s = strings[si];
+                readDescriptor(node, s);
+            }
+            else for (int j = 0; j < len; j++) in.readUnsignedByte();
+        }
+    }
+
+    // Find class references of the form L...; or L...< in the descriptor.
     void readDescriptor(Node node, String descriptor) {
+        if (node.className.equals("Recorder"))
         while (true) {
             int L = descriptor.indexOf('L');
             if (L < 0) break;
             int S = descriptor.indexOf(';', L);
+            int B = descriptor.indexOf('<', L);
+            if (B >= 0 && B < S) S = B;
             String name = descriptor.substring(L+1, S);
             descriptor = descriptor.substring(S+1);
             if (name.contains("$")) continue;
             if (name.equals(node.classPath)) continue;
             if (node.refs.contains(name)) continue;
             node.refs.add(name);
-        }
-    }
-
-    // Skip field, method or class attributes.
-    void skipAttributes(DataInputStream in) throws Exception {
-        int n = in.readUnsignedShort();
-        for (int i = 0; i < n; i++) {
-            in.readUnsignedShort();
-            int n2 = in.readInt();
-            for (int j = 0; j < n2; j++) in.readUnsignedByte();
         }
     }
 
