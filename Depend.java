@@ -1,7 +1,7 @@
 import java.io.*;
 import java.util.*;
 
-/* By Ian Holyer, 2017. Open source: see licence.txt.
+/* By Ian Holyer, 2017. Free and open source: see licence.txt.
 
 Find dependencies between the Java classes in a directory. Present the
 results in reverse dependency order, emphasizing cyclic groups. Assumes the
