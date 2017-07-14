@@ -170,7 +170,6 @@ class Depend {
 
     // Find class references of the form L...; or L...< in the descriptor.
     void readDescriptor(Node node, String descriptor) {
-        if (node.className.equals("Recorder"))
         while (true) {
             int L = descriptor.indexOf('L');
             if (L < 0) break;
