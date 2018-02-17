@@ -1,72 +1,76 @@
 import java.io.*;
 import java.util.*;
 
-/* By Ian Holyer, 2017. Free and open source: see licence.txt.
+/* Dependency checker. Free and open source: see licence.txt.
 
 Find dependencies between the Java classes in a directory. Present the
 results in reverse dependency order, emphasizing cyclic groups. Assumes the
 Java 8 class file format.  */
 
+// To make sure that only one class file is generated when the program is
+// compiled, for maximum user convenience, the Depend class itself is used to
+// create a separate object for each analyzed class, holding its information.
+// The overall program data is passed around in method arguments.
 class Depend {
-    private File folder;
-    private List<Node> nodes;
-    private List<Set<Node>> groups;
+    // The info associated with one class.
+    private String fileName, className, classPath;
+    private List<String> refs;
+    private List<Depend> out, in;
+    private boolean visited;
+    private Set<Depend> group;
+    private boolean isRoot = false;
 
-    // A Node represents the info associated with a class
-    class Node {
-        String fileName, className, classPath;
-        List<String> refs;
-        List<Node> out, in;
-        boolean visited;
-        Set<Node> group;
-        public String toString() { return className; }
-    }
+    public String toString() { return className; }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         Depend program = new Depend();
         if (args.length >= 1 && (args.length > 1 || args[0].charAt(0) == '-')) {
             System.err.println("Use:  java Depend [directory]");
             System.exit(0);
         }
-        program.folder = new File(args.length > 0 ? args[0] : ".");
-        program.run();
+        program.run(args.length > 0 ? args[0] : ".");
     }
 
     // Find dependencies in the directory of classes.
-    private void run() throws Exception {
-        findClasses();
-        for (Node node : nodes) readClass(node);
-        buildRefs();
-        reverseRefs();
-        findGroups();
-        print();
+    private void run(String folderName) {
+        File folder = new File(folderName);
+        List<Depend> nodes = findClasses(folder);
+        for (Depend node : nodes) readClass(folder, node);
+        buildRefs(nodes);
+        reverseRefs(nodes);
+        findGroups(nodes);
+        print(nodes);
     }
 
     // Find the classes in the directory, excluding inner classes.
-    private void findClasses() {
-        nodes = new ArrayList<Node>();
+    private List<Depend> findClasses(File folder) {
+        List<Depend> nodes = new ArrayList<Depend>();
         for (String name: folder.list()) {
             if (! name.endsWith(".class")) continue;
             if (name.contains("$")) continue;
-            Node node = new Node();
+            Depend node = new Depend();
             node.fileName = name;
             node.className = name.substring(0, name.length()-6);
             nodes.add(node);
         }
+        return nodes;
     }
 
     // Read a class file, finding the class path, and extracting the references
     // to other classes from the constant pool.
-    void readClass(Node node) throws Exception {
-        InputStream is = new FileInputStream(new File(folder, node.fileName));
-        DataInputStream in = new DataInputStream(is);
-        skipHeader(in);
-        String[] strings = readConstantPool(node, in);
-        skipSuperClasses(in);
-        readFields(node, in, strings);
-        readMethods(node, in, strings);
-        readAttributes(node, in, strings);
-        in.close();
+    void readClass(File folder, Depend node) {
+        try {
+            InputStream is = new FileInputStream(new File(folder, node.fileName));
+            DataInputStream in = new DataInputStream(is);
+            skipHeader(in);
+            String[] strings = readConstantPool(node, in);
+            skipSuperClasses(in);
+            readFields(node, in, strings);
+            readMethods(node, in, strings);
+            readAttributes(node, in, strings);
+            in.close();
+        }
+        catch (Exception e) { throw new Error(e); }
     }
 
     // Skip the magic number, and minor/major version numbers.
@@ -85,7 +89,7 @@ class Depend {
 
     // Read the constant pool, skip access flags, read class name.
     // Extract the unique class references, return the strings.
-    String[] readConstantPool(Node node, DataInputStream in) throws Exception {
+    String[] readConstantPool(Depend node, DataInputStream in) throws Exception {
         int nConstants = in.readUnsignedShort();
         String[] strings = new String[nConstants];
         int[] classes = new int[nConstants];
@@ -134,7 +138,7 @@ class Depend {
     }
 
     // Read the fields.  Extract class references from descriptors.
-    void readFields(Node node, DataInputStream in, String[] strings)
+    void readFields(Depend node, DataInputStream in, String[] strings)
     throws Exception {
         int n = in.readUnsignedShort();
         for (int i = 0; i < n; i++) {
@@ -147,13 +151,13 @@ class Depend {
     }
 
     // Read the methods in the same way as the fields.
-    void readMethods(Node node, DataInputStream in, String[] strings)
+    void readMethods(Depend node, DataInputStream in, String[] strings)
     throws Exception {
         readFields(node, in, strings);
     }
 
     // Read field, method or class attributes, extract signatures.
-    void readAttributes(Node node, DataInputStream in, String[] strings)
+    void readAttributes(Depend node, DataInputStream in, String[] strings)
     throws Exception {
         int n = in.readUnsignedShort();
         for (int i = 0; i < n; i++) {
@@ -169,7 +173,7 @@ class Depend {
     }
 
     // Find class references of the form L...; or L...< in the descriptor.
-    void readDescriptor(Node node, String descriptor) {
+    void readDescriptor(Depend node, String descriptor) {
         while (true) {
             int L = descriptor.indexOf('L');
             if (L < 0) break;
@@ -187,67 +191,67 @@ class Depend {
 
     // Build a map from classPath to node.  Use it to convert the refs into
     // direct node pointers.  Discard refs to classes outside the folder.
-    void buildRefs() {
-        Map<String,Node> map = new HashMap<String,Node>();
-        for (Node node : nodes) map.put(node.classPath, node);
-        for (Node node : nodes) {
-            node.out = new ArrayList<Node>();
+    void buildRefs(List<Depend> nodes) {
+        Map<String,Depend> map = new HashMap<String,Depend>();
+        for (Depend node : nodes) map.put(node.classPath, node);
+        for (Depend node : nodes) {
+            node.out = new ArrayList<Depend>();
             for (String ref : node.refs) {
-                Node to = map.get(ref);
+                Depend to = map.get(ref);
                 if (to != null) node.out.add(to);
             }
         }
     }
 
     // Find the refs from other nodes into each node.
-    void reverseRefs() {
-        for (Node node : nodes) node.in = new ArrayList<Node>();
-        for (Node node : nodes) {
-            for (Node to : node.out) to.in.add(node);
+    void reverseRefs(List<Depend> nodes) {
+        for (Depend node : nodes) node.in = new ArrayList<Depend>();
+        for (Depend node : nodes) {
+            for (Depend to : node.out) to.in.add(node);
         }
     }
 
     // Find the cyclically dependent groups using Kosaraju's algorithm.
     // See https://en.wikipedia.org/wiki/Kosaraju's_algorithm
-    private void findGroups() {
-        groups = new ArrayList<Set<Node>>();
-        List<Node> list = new ArrayList<Node>();
-        for (Node node : nodes) node.visited = false;
-        for (Node node : nodes) node.group = null;
-        for (Node node : nodes) visit(list, node);
-        for (Node node : list) assign(node, node);
+    private void findGroups(List<Depend> nodes) {
+        List<Depend> list = new ArrayList<Depend>();
+        for (Depend node : nodes) node.visited = false;
+        for (Depend node : nodes) node.group = null;
+        for (Depend node : nodes) visit(list, node);
+        for (Depend node : list) assign(node, node);
     }
 
     // Visit a node during the algorithm.
-    private void visit(List<Node> list, Node node) {
+    private void visit(List<Depend> list, Depend node) {
         if (node.visited) return;
         node.visited = true;
-        for (Node to : node.out) visit(list, to);
+        for (Depend to : node.out) visit(list, to);
         list.add(0, node);
     }
 
     // Assign a node to a group during the algorithm.
-    private void assign(Node node, Node root) {
+    private void assign(Depend node, Depend root) {
         if (node.group != null) return;
         if (node == root) {
-            root.group = new HashSet<Node>();
-            groups.add(0, root.group);
+            root.group = new HashSet<Depend>();
+            root.isRoot = true;
         }
         root.group.add(node);
         node.group = root.group;
-        for (Node from : node.in) assign(from, root);
+        for (Depend from : node.in) assign(from, root);
     }
 
-    // Print out the groups, and their dependencies.
-    void print() {
-        for (Set<Node> g : groups) {
+    void print(List<Depend> nodes) {
+        for (Depend node : nodes) {
+            if (! node.isRoot) continue;
+            Set<Depend> g = node.group;
             if (g.size() == 1) {
-                Node node = g.iterator().next();
-                System.out.println(node + " -> " + node.out);
+                Depend n = g.iterator().next();
+                System.out.println(n + " -> " + n.out);
             } else {
                 System.out.println(g);
-                for (Node node : g) {
-                    System.out.println("    " + node + " -> " + node.out);
+                for (Depend n : g) {
+                    System.out.println("    " + n + " -> " + n.out);
                 }
             }
         }
