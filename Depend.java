@@ -18,7 +18,6 @@ class Depend {
     private List<Depend> out, in;
     private boolean visited;
     private Set<Depend> group;
-    private boolean isRoot = false;
 
     public String toString() { return className; }
 
@@ -38,8 +37,8 @@ class Depend {
         for (Depend node : nodes) readClass(folder, node);
         buildRefs(nodes);
         reverseRefs(nodes);
-        findGroups(nodes);
-        print(nodes);
+        List<Set<Depend>> groups = findGroups(nodes);
+        print(groups);
     }
 
     // Find the classes in the directory, excluding inner classes.
@@ -213,12 +212,14 @@ class Depend {
 
     // Find the cyclically dependent groups using Kosaraju's algorithm.
     // See https://en.wikipedia.org/wiki/Kosaraju's_algorithm
-    private void findGroups(List<Depend> nodes) {
+    private List<Set<Depend>> findGroups(List<Depend> nodes) {
+        List<Set<Depend>> groups = new ArrayList<Set<Depend>>();
         List<Depend> list = new ArrayList<Depend>();
         for (Depend node : nodes) node.visited = false;
         for (Depend node : nodes) node.group = null;
         for (Depend node : nodes) visit(list, node);
-        for (Depend node : list) assign(node, node);
+        for (Depend node : list) assign(groups, node, node);
+        return groups;
     }
 
     // Visit a node during the algorithm.
@@ -230,28 +231,26 @@ class Depend {
     }
 
     // Assign a node to a group during the algorithm.
-    private void assign(Depend node, Depend root) {
+    private void assign(List<Set<Depend>> groups, Depend node, Depend root) {
         if (node.group != null) return;
         if (node == root) {
             root.group = new HashSet<Depend>();
-            root.isRoot = true;
+            groups.add(root.group);
         }
         root.group.add(node);
         node.group = root.group;
-        for (Depend from : node.in) assign(from, root);
+        for (Depend from : node.in) assign(groups, from, root);
     }
 
-    void print(List<Depend> nodes) {
-        for (Depend node : nodes) {
-            if (! node.isRoot) continue;
-            Set<Depend> g = node.group;
+    void print(List<Set<Depend>> groups) {
+        for (Set<Depend> g : groups) {
             if (g.size() == 1) {
-                Depend n = g.iterator().next();
-                System.out.println(n + " -> " + n.out);
+                Depend node = g.iterator().next();
+                System.out.println(node + " -> " + node.out);
             } else {
                 System.out.println(g);
-                for (Depend n : g) {
-                    System.out.println("    " + n + " -> " + n.out);
+                for (Depend node : g) {
+                    System.out.println("    " + node + " -> " + node.out);
                 }
             }
         }
